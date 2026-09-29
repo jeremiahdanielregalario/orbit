@@ -1,63 +1,1453 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { ArrowDownToLine, ArrowLeftRight, ArrowUpRight, BookOpen, Check, ChevronLeft, ChevronRight, CircleHelp, Clock3, Database, FileJson, Fingerprint, Instagram, LayoutDashboard, LockKeyhole, Orbit as OrbitIcon, Plus, Search, ShieldCheck, Trash2, Upload, Users, X } from 'lucide-react';
-import { compareSnapshots, csv, demoSnapshot, relationships, timeline, type Account, type Group, type Snapshot } from './lib/analysis';
-type Page = 'overview' | 'connections' | 'compare' | 'guide' | 'privacy' | 'platforms';
-const groupNames: Record<Group,string> = {all:'All connections',mutual:'Mutual','not-following-back':'Not following back','you-dont-follow':"You don’t follow",pending:'Pending requests'};
-const number = (n:number)=>n.toLocaleString();
-function saveBlob(text:string,name:string,type:string){ const url=URL.createObjectURL(new Blob([text],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000); }
-function readSaved(): Snapshot[] { try { const values=JSON.parse(localStorage.getItem('orbit-snapshots')||'[]'); return Array.isArray(values) ? values.filter((s:Snapshot)=>s && Array.isArray(s.followers) && Array.isArray(s.following) && Array.isArray(s.pending) && Array.isArray(s.files) && Array.isArray(s.warnings) && typeof s.label==='string' && [...s.followers,...s.following,...s.pending].every(a=>typeof a.username==='string' && /^[a-z0-9._]{1,30}$/.test(a.username) && (a.timestamp===null || (typeof a.timestamp==='number' && a.timestamp>0 && a.timestamp<8640000000000)))).slice(0,5) : []; }catch{return [];} }
-export default function App(){
-  const [page,setPage]=useState<Page>('overview'); const [snapshot,setSnapshot]=useState<Snapshot|null>(null);
-  const [saved,setSaved]=useState<Snapshot[]>(readSaved); const [group,setGroup]=useState<Group>('not-following-back');
-  const [search,setSearch]=useState('');const [sort,setSort]=useState('name');const [index,setIndex]=useState(0);
-  const [importOpen,setImportOpen]=useState(false);const [busy,setBusy]=useState(false);const [error,setError]=useState('');const [toast,setToast]=useState('');const [drag,setDrag]=useState(false);
-  const [oldId,setOldId]=useState('');const [newId,setNewId]=useState(''); const [savedLabel,setSavedLabel]=useState('');
-  const fileInput=useRef<HTMLInputElement>(null);const dialog=useRef<HTMLDialogElement>(null);const worker=useRef<Worker|null>(null);
-  const data=useMemo(()=>snapshot ? relationships(snapshot):null,[snapshot]);
-  const rows=useMemo(()=>{if(!data||!snapshot)return []; const all: Record<Group,Account[]>={all:data.all,mutual:data.mutual,'not-following-back':data.notFollowingBack,'you-dont-follow':data.youDontFollow,pending:snapshot.pending};return all[group].filter(a=>a.username.includes(search.toLowerCase().replace(/^@/,''))).sort((a,b)=>sort==='name'?a.username.localeCompare(b.username):(b.timestamp||0)-(a.timestamp||0));},[data,snapshot,group,search,sort]);
-  const chart=useMemo(()=>snapshot ? timeline(snapshot.following):[],[snapshot]);
-  const chartRecent=chart.slice(-18);
-  const older=saved.find(s=>s.importedAt===oldId),newer=saved.find(s=>s.importedAt===newId);
-  const comparison=older&&newer&&oldId!==newId ? compareSnapshots(older,newer):null;
-  useEffect(()=>{setIndex(0)},[group,search,sort,snapshot]);
-  useEffect(()=>{if(importOpen)dialog.current?.showModal();else dialog.current?.close();},[importOpen]);
-  useEffect(()=>{if(!toast)return;const t=setTimeout(()=>setToast(''),4500);return()=>clearTimeout(t)},[toast]);
-  useEffect(()=>()=>worker.current?.terminate(),[]);
-  function navigate(next:Page){setPage(next);window.scrollTo({top:0,behavior:'smooth'});}
-  function openImport(){setError('');setImportOpen(true);}
-  function cancelImport(){worker.current?.terminate();worker.current=null;setBusy(false);setImportOpen(false);}
-  function importFiles(files:File[]){if(!files.length)return;worker.current?.terminate();setBusy(true);setError('');const w=new Worker(new URL('./lib/import.worker.ts',import.meta.url),{type:'module'});worker.current=w;w.onmessage=({data:result})=>{setBusy(false);w.terminate();worker.current=null;if(result.error){setError(result.error);return;}setSnapshot(result.snapshot);setSavedLabel('');setImportOpen(false);setPage('overview');setToast('Your archive is ready. Nothing was uploaded.');};w.onerror=()=>{setBusy(false);setError('The archive could not be processed. Try the extracted connection JSON files.');w.terminate();worker.current=null;};w.postMessage({files});}
-  function saveSnapshot(){if(!snapshot||snapshot.demo)return;const entry={...snapshot,label:savedLabel.trim()||`Instagram · ${new Date().toLocaleDateString()}`};const next=[entry,...saved.filter(s=>s.importedAt!==entry.importedAt)].slice(0,5);try{localStorage.setItem('orbit-snapshots',JSON.stringify(next));setSaved(next);setToast('Snapshot saved on this device. Up to five are kept.');}catch{setToast('Device storage is full or unavailable. Your current analysis is still available.');}}
-  function removeSaved(id:string){const next=saved.filter(s=>s.importedAt!==id);try{localStorage.setItem('orbit-snapshots',JSON.stringify(next));setSaved(next);}catch{setToast('Could not update device storage.');}}
-  function clearAll(){try{localStorage.removeItem('orbit-snapshots');setSaved([]);setSnapshot(null);setToast('Imported data and saved snapshots cleared.');}catch{setToast('Could not clear device storage. Use your browser’s site-data settings.');}}
-  function showGroup(g:Group){setGroup(g);setPage('connections');}
-  const mutualRate=snapshot?.following.length&&data?Math.round(data.mutual.length/snapshot.following.length*100):0;
-  return <div className="app-shell">
-    <aside className="sidebar"><a className="brand" href="#" onClick={e=>{e.preventDefault();navigate('overview')}}><OrbitIcon size={34}/><span>orbit<span className="brand-dot">.</span></span></a><div className="workspace-label">YOUR SOCIAL PERSPECTIVE</div>
-      <nav aria-label="Main navigation">{([{id:'overview',name:'Overview',icon:LayoutDashboard},{id:'connections',name:'Connections',icon:Users},{id:'compare',name:'Compare snapshots',icon:ArrowLeftRight}] as const).map(item=><button key={item.id} className={page===item.id?'nav-item active':'nav-item'} onClick={()=>navigate(item.id)} aria-current={page===item.id?'page':undefined}><item.icon size={18}/>{item.name}{item.id==='connections'&&data&&<span className="nav-count">{data.all.length}</span>}</button>)}</nav>
-      <div className="nav-divider"/><div className="workspace-label">WORKSPACE</div><nav aria-label="Workspace">{([{id:'platforms',name:'Platforms',icon:Database},{id:'guide',name:'Import guide',icon:BookOpen},{id:'privacy',name:'Privacy & storage',icon:ShieldCheck}]as const).map(item=><button className={page===item.id?'nav-item active':'nav-item'} key={item.id} onClick={()=>navigate(item.id)}><item.icon size={18}/>{item.name}</button>)}</nav>
-      <div className="sidebar-bottom"><div className="private-note"><LockKeyhole size={18}/><strong>Your data stays yours.</strong><p>Analyzed in your browser.<br/>Never uploaded to a server.</p></div><div className="author"><span className="author-avatar">JD</span><div><strong>JD Regalario</strong><small>Creator of Orbit</small></div><ArrowUpRight size={16}/></div></div>
-    </aside>
-    <main><header className="topbar"><span>Workspace <ChevronRight size={13}/> <strong>{page==='overview'?'Overview':page==='connections'?'Connections':page==='compare'?'Compare snapshots':page==='guide'?'Import guide':page==='privacy'?'Privacy & storage':'Platforms'}</strong></span><div className="local-badge"><span/> Local processing <ShieldCheck size={14}/></div></header>
-    <div className="content"><div className="page-heading"><div className="eyebrow"><span className="tiny-dot"/> YOUR CIRCLE, A LITTLE CLEARER</div><div className="title-row"><div><h1>{page==='overview'?'A little perspective.':page==='connections'?'Your connections.':page==='compare'?'See what changed.':page==='guide'?'From archive to insight.':page==='privacy'?'Private by design.':'More of your world.'}</h1><p>{page==='overview'?'Get to know the shape of your social world.':page==='connections'?'Find a connection. Understand where you stand.':page==='compare'?'Compare follower lists from two exports of the same account.':page==='guide'?'A few steps in Instagram. A clearer picture in Orbit.':page==='privacy'?'You choose what to import, save, and remove.':'Instagram first. A foundation for your other social accounts.'}</p></div><button className="primary" onClick={openImport}><Plus size={17}/> Import archive</button></div></div>
-    {snapshot&&page!=='guide'&&page!=='privacy'&&page!=='platforms'&&<div className="source-strip"><span className="instagram-icon"><Instagram size={18}/></span><strong>Instagram</strong><span className="source-label">{snapshot.demo?'Sample workspace':snapshot.label}</span><span className="pill">{snapshot.demo?'DEMO DATA':'LOCAL ARCHIVE'}</span><button className="text-button" onClick={()=>{setSnapshot(null);setToast('Current analysis cleared. Saved snapshots are still on this device.')}}><X size={14}/> Clear analysis</button></div>}
-    {page==='overview'&&<>{!snapshot?<><section className="welcome-grid"><div className="welcome-panel"><span className="tag"><Instagram size={14}/> BUILT FOR INSTAGRAM</span><h2>Your connections.<br/><span>The whole picture.</span></h2><p>Find who follows you back, explore your circle, and see what changes over time. All from your Instagram data export.</p><div className="button-row"><button className="primary" onClick={openImport}><Upload size={17}/> Import your archive</button><button className="secondary" onClick={()=>{setSnapshot(demoSnapshot());setToast('You’re exploring fictional sample data.')}}>Explore a demo <ArrowUpRight size={16}/></button></div><small><LockKeyhole size={13}/> No password. No account connection. Just your data.</small></div><div className="orbit-art" aria-hidden="true"><div className="orbit-ring ring-one"/><div className="orbit-ring ring-two"/><div className="orbit-ring ring-three"/><div className="orbit-core"><OrbitIcon size={48}/></div><span className="planet p1">AR</span><span className="planet p2">JL</span><span className="planet p3">MK</span><span className="planet p4">ST</span><span className="art-caption"><span/> Every connection has a place.</span></div></section><div className="feature-grid">{[{icon:Users,title:'See who follows back',text:'Mutual connections and one-way follows, clearly separated.'},{icon:ArrowLeftRight,title:'Notice what changes',text:'Save snapshots on your device and compare follower lists.'},{icon:Fingerprint,title:'Keep your data close',text:'Your archive is processed here. No server uploads or tracking.'}].map(f=><section className="panel feature" key={f.title}><f.icon size={22}/><h3>{f.title}</h3><p>{f.text}</p></section>)}</div><section className="guide-callout"><div><BookOpen size={22}/><div><h3>New to Instagram exports?</h3><p>We’ll show you exactly which data and format to request.</p></div></div><button className="secondary" onClick={()=>navigate('guide')}>See the guide <ArrowUpRight size={16}/></button></section></>:data&&<>
-      <div className="stats-grid">{[{label:'Following',value:snapshot.following.length,sub:'Accounts in your following list',group:'all' as Group},{label:'Followers',value:snapshot.followers.length,sub:'Accounts in your follower list',group:'all' as Group},{label:'Mutual connections',value:data.mutual.length,sub:`${mutualRate}% of accounts you follow`,group:'mutual' as Group},{label:'Not following back',value:data.notFollowingBack.length,sub:'You follow them, they don’t follow you',group:'not-following-back' as Group}].map((s,i)=><button className={`stat-card stat-${i}`} key={s.label} onClick={()=>showGroup(s.group)}><span>{s.label}<ArrowUpRight size={16}/></span><strong>{number(s.value)}</strong><small>{s.sub}</small></button>)}</div>
-      <div className="chart-grid"><section className="panel circle-panel"><div className="panel-heading"><div><h3>Your circle, at a glance</h3><p>How your connections overlap</p></div><Users size={18}/></div><div className="circle-chart-row"><div className="donut" role="img" aria-label={`${data.mutual.length} mutual, ${data.notFollowingBack.length} not following back, ${data.youDontFollow.length} you don't follow`} style={{background:data.all.length?`conic-gradient(#c3ef7b 0 ${data.mutual.length/data.all.length*100}%, #a69bee ${data.mutual.length/data.all.length*100}% ${(data.mutual.length+data.notFollowingBack.length)/data.all.length*100}%, #719aa7 0)`:'#303830'}}><div><strong>{number(data.all.length)}</strong><span>connections</span></div></div><div className="legend">{[{name:'Mutual',count:data.mutual.length,color:'#c3ef7b',group:'mutual' as Group},{name:'Not following back',count:data.notFollowingBack.length,color:'#a69bee',group:'not-following-back' as Group},{name:'You don’t follow',count:data.youDontFollow.length,color:'#719aa7',group:'you-dont-follow' as Group}].map(l=><button onClick={()=>showGroup(l.group)} key={l.name}><i style={{background:l.color}}/><span>{l.name}</span><strong>{number(l.count)}</strong></button>)}</div></div><div className="panel-foot"><span className="tiny-dot"/> Each account is counted once.</div></section>
-      <section className="panel timeline-panel"><div className="panel-heading"><div><h3>When you made connections</h3><p>Following timestamps in this export · UTC</p></div><span className="subtle-tag">{chart.length>18?'LAST 18 MONTHS':'BY MONTH'}</span></div>{chartRecent.length?<div className="chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={chartRecent} margin={{top:14,right:12,left:-25,bottom:0}}><defs><linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#c3ef7b" stopOpacity={0.25}/><stop offset="100%" stopColor="#c3ef7b" stopOpacity={0}/></linearGradient></defs><CartesianGrid stroke="#2a302b" vertical={false} strokeDasharray="3 5"/><XAxis dataKey="month" tickFormatter={v=>new Date(`${v}-01T00:00:00Z`).toLocaleDateString('en',{month:'short',year:'2-digit',timeZone:'UTC'})} axisLine={false} tickLine={false} tick={{fill:'#929b93',fontSize:10}} minTickGap={24}/><YAxis allowDecimals={false} axisLine={false} tickLine={false} tick={{fill:'#929b93',fontSize:10}}/><Tooltip contentStyle={{background:'#202720',border:'1px solid #3c473c',borderRadius:10,color:'#ecf2e9'}}/><Area type="monotone" dataKey="count" name="Connections" stroke="#c3ef7b" strokeWidth={2} fill="url(#areaFill)" isAnimationActive={false}/></AreaChart></ResponsiveContainer></div>:<div className="empty-mini">No usable following timestamps in this export.</div>}<div className="panel-foot">This is a timestamp distribution, not historical follower growth.</div></section></div>
-      <section className="panel"><div className="panel-heading"><div><h3>A closer look</h3><p>Accounts you follow that don’t appear in your follower list</p></div><button className="text-button" onClick={()=>showGroup('not-following-back')}>View all {number(data.notFollowingBack.length)} <ArrowUpRight size={15}/></button></div><div className="preview-accounts">{data.notFollowingBack.slice(0,4).map((a,i)=><AccountCard key={a.username} account={a} index={i} demo={snapshot.demo}/>)}{!data.notFollowingBack.length&&<p className="muted">Every account you follow appears in your follower list.</p>}</div></section><p className="data-note"><CircleHelp size={15}/>{snapshot.warnings[0]}</p>
-    </>}</>}
-    {page==='connections'&&<>{!snapshot?<Empty onImport={openImport}/>:<section className="panel connections-panel"><div className="filter-tabs" role="group" aria-label="Connection category">{(Object.keys(groupNames) as Group[]).map(g=><button key={g} className={g===group?'selected':''} onClick={()=>setGroup(g)}>{groupNames[g]}</button>)}</div><div className="table-toolbar"><label className="search-box"><Search size={17}/><input aria-label="Search usernames" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search a username..."/></label><select aria-label="Sort connections" value={sort} onChange={e=>setSort(e.target.value)}><option value="name">Username A to Z</option><option value="recent">Latest timestamp</option></select><button className="secondary" disabled={!rows.length} onClick={()=>saveBlob(csv(rows),`orbit-${group}.csv`,'text/csv;charset=utf-8')}><ArrowDownToLine size={15}/> Export CSV</button></div><div className="table-overflow"><table><thead><tr><th>ACCOUNT</th><th>RELATIONSHIP</th><th>EXPORT TIMESTAMP</th><th><span className="sr-only">Profile</span></th></tr></thead><tbody>{rows.slice(index*25,index*25+25).map((a,i)=><tr key={a.username}><td><span className={`avatar color-${i%4}`}>{a.username.slice(0,2).toUpperCase()}</span><strong>@{a.username}</strong></td><td><span className="relationship-tag">{group==='all'?data?.mutual.some(v=>v.username===a.username)?'Mutual':data?.notFollowingBack.some(v=>v.username===a.username)?'Not following back':'You don’t follow':groupNames[group]}</span></td><td className="muted">{a.timestamp?new Date(a.timestamp*1000).toLocaleDateString():'Not available'}</td><td>{!snapshot.demo&&<a aria-label={`Open ${a.username} on Instagram`} href={`https://www.instagram.com/${a.username}/`} target="_blank" rel="noreferrer"><ArrowUpRight size={16}/></a>}</td></tr>)}</tbody></table></div>{!rows.length&&<div className="empty-mini"><Search size={24}/><h3>No matching connections</h3><p>Try a different search or category.</p></div>}<div className="pagination"><span>{rows.length?`${index*25+1}–${Math.min(index*25+25,rows.length)} of ${number(rows.length)}`:'0 results'}</span><div><button aria-label="Previous page" disabled={index===0} onClick={()=>setIndex(index-1)}><ChevronLeft size={17}/></button><span>Page {index+1}</span><button aria-label="Next page" disabled={(index+1)*25>=rows.length} onClick={()=>setIndex(index+1)}><ChevronRight size={17}/></button></div></div></section>}<p className="data-note"><CircleHelp size={15}/> Names and relationships may have changed since the export. Orbit does not unfollow accounts for you.</p></>}
-    {page==='compare'&&<><section className="panel save-panel"><div><h3>Keep a reference point</h3><p>Save your current import in this browser. Use the same account name in each label.</p></div><div className="button-row"><input aria-label="Snapshot label" placeholder="e.g. myusername · September" value={savedLabel} onChange={e=>setSavedLabel(e.target.value)} maxLength={80}/><button className="primary" disabled={!snapshot||snapshot.demo} onClick={saveSnapshot}><Database size={16}/> Save snapshot</button></div><small>Up to five snapshots on this device. Saving a sixth replaces the oldest. Sample data cannot be saved.</small></section><section className="panel compare-panel"><div className="panel-heading"><div><h3>Compare two exports</h3><p>Select an earlier and a later export from the same Instagram account.</p></div><ArrowLeftRight size={19}/></div><div className="comparison-selects"><label>Earlier export<select value={oldId} onChange={e=>setOldId(e.target.value)}><option value="">Choose a snapshot</option>{saved.map(s=><option key={s.importedAt} value={s.importedAt}>{s.label}</option>)}</select></label><ArrowLeftRight/><label>Later export<select value={newId} onChange={e=>setNewId(e.target.value)}><option value="">Choose a snapshot</option>{saved.map(s=><option key={s.importedAt} value={s.importedAt}>{s.label}</option>)}</select></label></div>{oldId&&oldId===newId&&<p role="alert" className="error">Choose two different snapshots.</p>}{comparison?<div className="comparison-results">{[{label:'New in follower list',rows:comparison.added},{label:'No longer in follower list',rows:comparison.removed}].map(c=><div key={c.label}><div className="result-heading"><h3>{c.label} <span>{c.rows.length}</span></h3><button className="text-button" disabled={!c.rows.length} onClick={()=>saveBlob(csv(c.rows),`orbit-${c.label.toLowerCase().replaceAll(' ','-')}.csv`,'text/csv')}>Export <ArrowDownToLine size={14}/></button></div><div className="change-list">{c.rows.length?c.rows.map(a=><p key={a.username}>@{a.username}</p>):<p>No changes in this category.</p>}</div></div>)}</div>:<div className="empty-mini"><Clock3 size={28}/><h3>A little time makes a difference.</h3><p>Import and save two exports to see changes here.</p></div>}<div className="panel-foot">A missing username may reflect an unfollow, rename, deactivation, or incomplete export. Orbit cannot identify the reason or verify account ownership from these files.</div></section><section className="panel"><div className="panel-heading"><h3>Saved on this device</h3><span className="muted">{saved.length} / 5</span></div>{saved.length?saved.map(s=><div className="saved-row" key={s.importedAt}><FileJson size={20}/><div><strong>{s.label}</strong><small>{number(s.followers.length)} followers · Imported {new Date(s.importedAt).toLocaleString()}</small></div><button className="secondary" onClick={()=>{setSnapshot(s);navigate('overview')}}>Open</button><button className="icon-button" aria-label={`Delete ${s.label}`} onClick={()=>removeSaved(s.importedAt)}><Trash2 size={16}/></button></div>):<p className="empty-text">No snapshots saved yet.</p>}</section></>}
-    {page==='guide'&&<Guide onImport={openImport}/>}
-    {page==='privacy'&&<><div className="feature-grid">{[{icon:LockKeyhole,title:'Processed on your device',text:'Your ZIP and JSON files are read inside a browser worker. Orbit sends no archive contents to a server.'},{icon:Database,title:'Saved only when you choose',text:'Imports stay in memory until the page closes. Saved snapshots use local browser storage and can be removed anytime.'},{icon:ShieldCheck,title:'No Instagram credentials',text:'Orbit never needs your password, cookies, or an access token. Profile links open Instagram in a separate tab.'}].map(f=><section className="panel feature" key={f.title}><f.icon size={24}/><h3>{f.title}</h3><p>{f.text}</p></section>)}</div><section className="panel prose"><h3>What Orbit can tell you</h3><p>Connections are calculated by comparing usernames in your follower and following files. Dates come from the export. They are not evidence of how often someone interacts with you.</p><h3>What the files cannot tell you</h3><p>Profile visitors, who muted you, why a relationship changed, and a person’s interest in you are not available. A single export cannot identify who unfollowed you.</p><h3>Your device, your choice</h3><p>Anyone with access to this browser profile may be able to read saved snapshots. Local storage is not encrypted by Orbit. Clearing site data or using private browsing may remove them. Your hosting provider still receives normal page requests, such as your IP address, but no imported archive data.</p><button className="danger-button" onClick={clearAll}><Trash2 size={16}/> Clear all Orbit data on this device</button></section></>}
-    {page==='platforms'&&<><section className="panel platform-card"><span className="platform-logo"><Instagram size={32}/></span><div><span className="pill">AVAILABLE</span><h2>Instagram</h2><p>Follower comparisons, mutual connections, timestamp charts, pending requests, and local snapshots.</p></div><button className="primary" onClick={openImport}>Import archive <Upload size={16}/></button></section><div className="feature-grid">{[{name:'X / Twitter',text:'Planned: follower and following comparisons using account IDs. Archive scripts must be parsed as data, never executed.'},{name:'TikTok',text:'Planned: a dedicated JSON adapter for supported follow lists and activity records. Availability varies by export.'},{name:'Snapchat',text:'Planned: friendship and account-history views. Its data does not map directly to Instagram follow relationships.'}].map(p=><section className="panel feature" key={p.name}><span className="subtle-tag">PLANNED</span><h3>{p.name}</h3><p>{p.text}</p></section>)}</div><p className="data-note"><CircleHelp size={15}/> Only Instagram archives are supported in this release. Each new platform needs its own validated parser and clear data limitations.</p></>}
-    <footer><span><OrbitIcon size={15}/> Orbit <span className="footer-dot">·</span> Made by JD Regalario</span><button onClick={()=>navigate('privacy')}>Built to keep your data yours <ArrowUpRight size={13}/></button></footer></div></main>
-    <dialog ref={dialog} onCancel={e=>{e.preventDefault();cancelImport()}} onClick={e=>{if(e.target===e.currentTarget)cancelImport()}}><div className="modal"><button className="close-modal icon-button" aria-label="Close import" onClick={cancelImport}><X size={20}/></button><span className="modal-icon"><Upload size={25}/></span><h2>Bring your circle into focus.</h2><p>Choose your Instagram ZIP, or select following.json and every followers_*.json file together.</p><input ref={fileInput} className="sr-only" tabIndex={-1} type="file" multiple accept=".zip,.json" onChange={e=>{importFiles(Array.from(e.target.files||[]));e.target.value='';}}/><button className={`dropzone ${drag?'dragging':''}`} disabled={busy} onClick={()=>fileInput.current?.click()} onDragOver={e=>{e.preventDefault();setDrag(true)}} onDragLeave={()=>setDrag(false)} onDrop={e=>{e.preventDefault();setDrag(false);if(!busy)importFiles(Array.from(e.dataTransfer.files));}}><Upload size={28}/><strong>{busy?'Reading your archive…':'Drop your archive here'}</strong><span>{busy?'Processing locally. You can cancel at any time.':'or click to choose files'}</span><small>ZIP or JSON · up to 250 MB total</small></button>{busy&&<div className="loading-line"/>}{error&&<p className="error" role="alert">{error}</p>}<div className="import-tip"><Check size={17}/><span>Choose <strong>JSON</strong> and <strong>All time</strong> when requesting your export. Import one account at a time.</span></div><div className="modal-bottom"><span><LockKeyhole size={13}/> Files never leave this device</span><button className="text-button" onClick={()=>{cancelImport();navigate('guide')}}>Need a hand? <ArrowUpRight size={14}/></button></div></div></dialog>
-    {toast&&<div className="toast" role="status"><Check size={17}/>{toast}<button aria-label="Dismiss notification" onClick={()=>setToast('')}><X size={15}/></button></div>}
-  </div>;
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import {
+  ArrowDownToLine,
+  ArrowLeftRight,
+  ArrowUpRight,
+  BookOpen,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  CircleHelp,
+  Clock3,
+  Database,
+  FileJson,
+  Fingerprint,
+  Instagram,
+  LayoutDashboard,
+  LockKeyhole,
+  Orbit as OrbitIcon,
+  Plus,
+  Search,
+  ShieldCheck,
+  Trash2,
+  Upload,
+  Users,
+  X,
+} from "lucide-react";
+import {
+  compareSnapshots,
+  csv,
+  demoSnapshot,
+  relationships,
+  timeline,
+  type Account,
+  type Group,
+  type Snapshot,
+} from "./lib/analysis";
+type Page =
+  "overview" | "connections" | "compare" | "guide" | "privacy" | "platforms";
+const groupNames: Record<Group, string> = {
+  all: "All connections",
+  followers: "Followers",
+  following: "Following",
+  mutual: "Mutual",
+  "not-following-back": "Not following back",
+  "you-dont-follow": "You don’t follow",
+  pending: "Pending requests",
+};
+const number = (n: number) => n.toLocaleString();
+function saveBlob(text: string, name: string, type: string) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-function AccountCard({account,index,demo}:{account:Account;index:number;demo?:boolean}){return <div className="account-card"><span className={`avatar color-${index%4}`}>{account.username.slice(0,2).toUpperCase()}</span><div><strong>@{account.username}</strong><small>Not following back</small></div>{!demo&&<a href={`https://www.instagram.com/${account.username}/`} target="_blank" rel="noreferrer" aria-label={`Open ${account.username} on Instagram`}><ArrowUpRight size={16}/></a>}</div>}
-function Empty({onImport}:{onImport:()=>void}){return <section className="panel empty-state"><Users size={35}/><h2>Your connections will appear here.</h2><p>Import an Instagram archive to get started.</p><button className="primary" onClick={onImport}><Upload size={17}/> Import archive</button></section>}
-function Guide({onImport}:{onImport:()=>void}){return <div className="guide-layout"><section className="panel steps">{[{title:'Open your information settings',text:'In Instagram, open your profile menu and go to Accounts Center (or Meta Account). Look for Your information and permissions, then Export your information or Download your information. Labels may vary.'},{title:'Choose your Instagram profile',text:'Create an export for one Instagram account and choose Export to device. Customize the information to include Followers and following. There is no need to include messages, photos, or videos.'},{title:'Set the format and date range',text:'Select JSON, then set the date range to All time. A shorter range may leave out connections and make the comparison incomplete.'},{title:'Download your export from Meta',text:'Submit the request and wait for Instagram to tell you it is ready. Return to the export page and download the ZIP to your device. Preparation time varies.'},{title:'Open it here in Orbit',text:'Import the ZIP, or extract it and select following.json and all followers_1.json, followers_2.json, and other follower parts together. Keep files from different accounts and export dates separate.'}].map((step,i)=><div className="step" key={step.title}><span>{String(i+1).padStart(2,'0')}</span><div><h3>{step.title}</h3><p>{step.text}</p>{i===2&&<div className="button-row"><span className="setting-chip"><Check size={13}/> JSON format</span><span className="setting-chip"><Check size={13}/> All time</span></div>}</div></div>)}<button className="primary" onClick={onImport}>I have my archive <Upload size={16}/></button></section><aside className="guide-aside"><section className="panel prose"><FileJson size={26}/><h3>The files that matter</h3><code>followers_1.json<br/>followers_2.json<br/>following.json</code><p>Often inside connections/followers_and_following/. Extra follower parts depend on your account size.</p><p>Optional: pending_follow_requests.json adds your pending requests.</p></section><section className="panel prose"><CircleHelp size={23}/><h3>Something missing?</h3><p>HTML exports are not supported. Request JSON instead. If a large ZIP will not import, extract it and select only the connection files.</p><a href="https://help.instagram.com/181231772500920" target="_blank" rel="noreferrer">Instagram’s official export help <ArrowUpRight size={14}/></a></section></aside></div>}
+function readSaved(): Snapshot[] {
+  try {
+    const values = JSON.parse(localStorage.getItem("orbit-snapshots") || "[]");
+    return Array.isArray(values)
+      ? values
+          .filter(
+            (s: Snapshot) =>
+              s &&
+              Array.isArray(s.followers) &&
+              Array.isArray(s.following) &&
+              Array.isArray(s.pending) &&
+              Array.isArray(s.files) &&
+              Array.isArray(s.warnings) &&
+              typeof s.label === "string" &&
+              [...s.followers, ...s.following, ...s.pending].every(
+                (a) =>
+                  typeof a.username === "string" &&
+                  /^[a-z0-9._]{1,30}$/.test(a.username) &&
+                  (a.timestamp === null ||
+                    (typeof a.timestamp === "number" &&
+                      a.timestamp > 0 &&
+                      a.timestamp < 8640000000000)),
+              ),
+          )
+          .slice(0, 5)
+      : [];
+  } catch {
+    return [];
+  }
+}
+export default function App() {
+  const [page, setPage] = useState<Page>("overview");
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [saved, setSaved] = useState<Snapshot[]>(readSaved);
+  const [group, setGroup] = useState<Group>("not-following-back");
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState("name");
+  const [index, setIndex] = useState(0);
+  const [importOpen, setImportOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [toast, setToast] = useState("");
+  const [drag, setDrag] = useState(false);
+  const [oldId, setOldId] = useState("");
+  const [newId, setNewId] = useState("");
+  const [savedLabel, setSavedLabel] = useState("");
+  const fileInput = useRef<HTMLInputElement>(null);
+  const dialog = useRef<HTMLDialogElement>(null);
+  const worker = useRef<Worker | null>(null);
+  const data = useMemo(
+    () => (snapshot ? relationships(snapshot) : null),
+    [snapshot],
+  );
+  const rows = useMemo(() => {
+    if (!data || !snapshot) return [];
+    const all: Record<Group, Account[]> = {
+      all: data.all,
+      followers: snapshot.followers,
+      following: snapshot.following,
+      mutual: data.mutual,
+      "not-following-back": data.notFollowingBack,
+      "you-dont-follow": data.youDontFollow,
+      pending: snapshot.pending,
+    };
+    return all[group]
+      .filter((a) =>
+        a.username.includes(search.toLowerCase().replace(/^@/, "")),
+      )
+      .sort((a, b) =>
+        sort === "name"
+          ? a.username.localeCompare(b.username)
+          : (b.timestamp || 0) - (a.timestamp || 0),
+      );
+  }, [data, snapshot, group, search, sort]);
+  const chart = useMemo(
+    () => (snapshot ? timeline(snapshot.following) : []),
+    [snapshot],
+  );
+  const chartRecent = chart.slice(-18);
+  const older = saved.find((s) => s.importedAt === oldId),
+    newer = saved.find((s) => s.importedAt === newId);
+  const comparison =
+    older && newer && oldId !== newId ? compareSnapshots(older, newer) : null;
+  useEffect(() => {
+    setIndex(0);
+  }, [group, search, sort, snapshot]);
+  useEffect(() => {
+    if (importOpen) dialog.current?.showModal();
+    else dialog.current?.close();
+  }, [importOpen]);
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(""), 4500);
+    return () => clearTimeout(t);
+  }, [toast]);
+  useEffect(() => () => worker.current?.terminate(), []);
+  function navigate(next: Page) {
+    setPage(next);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+  function openImport() {
+    setError("");
+    setImportOpen(true);
+  }
+  function cancelImport() {
+    worker.current?.terminate();
+    worker.current = null;
+    setBusy(false);
+    setImportOpen(false);
+  }
+  function importFiles(files: File[]) {
+    if (!files.length) return;
+    worker.current?.terminate();
+    setBusy(true);
+    setError("");
+    const w = new Worker(new URL("./lib/import.worker.ts", import.meta.url), {
+      type: "module",
+    });
+    worker.current = w;
+    w.onmessage = ({ data: result }) => {
+      setBusy(false);
+      w.terminate();
+      worker.current = null;
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
+      setSnapshot(result.snapshot);
+      setSavedLabel("");
+      setImportOpen(false);
+      setPage("overview");
+      setToast("Your archive is ready. Nothing was uploaded.");
+    };
+    w.onerror = () => {
+      setBusy(false);
+      setError(
+        "The archive could not be processed. Try the extracted connection JSON files.",
+      );
+      w.terminate();
+      worker.current = null;
+    };
+    w.postMessage({ files });
+  }
+  function saveSnapshot() {
+    if (!snapshot || snapshot.demo) return;
+    const entry = {
+      ...snapshot,
+      label:
+        savedLabel.trim() || `Instagram · ${new Date().toLocaleDateString()}`,
+    };
+    const next = [
+      entry,
+      ...saved.filter((s) => s.importedAt !== entry.importedAt),
+    ].slice(0, 5);
+    try {
+      localStorage.setItem("orbit-snapshots", JSON.stringify(next));
+      setSaved(next);
+      setToast("Snapshot saved on this device. Up to five are kept.");
+    } catch {
+      setToast(
+        "Device storage is full or unavailable. Your current analysis is still available.",
+      );
+    }
+  }
+  function removeSaved(id: string) {
+    const next = saved.filter((s) => s.importedAt !== id);
+    try {
+      localStorage.setItem("orbit-snapshots", JSON.stringify(next));
+      setSaved(next);
+    } catch {
+      setToast("Could not update device storage.");
+    }
+  }
+  function clearAll() {
+    try {
+      localStorage.removeItem("orbit-snapshots");
+      setSaved([]);
+      setSnapshot(null);
+      setToast("Imported data and saved snapshots cleared.");
+    } catch {
+      setToast(
+        "Could not clear device storage. Use your browser’s site-data settings.",
+      );
+    }
+  }
+  function showGroup(g: Group) {
+    setGroup(g);
+    setPage("connections");
+  }
+  const mutualRate =
+    snapshot?.following.length && data
+      ? Math.round((data.mutual.length / snapshot.following.length) * 100)
+      : 0;
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <a
+          className="brand"
+          href="#"
+          onClick={(e) => {
+            e.preventDefault();
+            navigate("overview");
+          }}
+        >
+          <OrbitIcon size={34} />
+          <span>
+            orbit<span className="brand-dot">.</span>
+          </span>
+        </a>
+        <div className="workspace-label">YOUR SOCIAL PERSPECTIVE</div>
+        <nav aria-label="Main navigation">
+          {(
+            [
+              { id: "overview", name: "Overview", icon: LayoutDashboard },
+              { id: "connections", name: "Connections", icon: Users },
+              {
+                id: "compare",
+                name: "Compare snapshots",
+                icon: ArrowLeftRight,
+              },
+            ] as const
+          ).map((item) => (
+            <button
+              key={item.id}
+              className={page === item.id ? "nav-item active" : "nav-item"}
+              onClick={() => navigate(item.id)}
+              aria-current={page === item.id ? "page" : undefined}
+            >
+              <item.icon size={18} />
+              {item.name}
+              {item.id === "connections" && data && (
+                <span className="nav-count">{data.all.length}</span>
+              )}
+            </button>
+          ))}
+        </nav>
+        <div className="nav-divider" />
+        <div className="workspace-label">WORKSPACE</div>
+        <nav aria-label="Workspace">
+          {(
+            [
+              { id: "platforms", name: "Platforms", icon: Database },
+              { id: "guide", name: "Import guide", icon: BookOpen },
+              { id: "privacy", name: "Privacy & storage", icon: ShieldCheck },
+            ] as const
+          ).map((item) => (
+            <button
+              className={page === item.id ? "nav-item active" : "nav-item"}
+              key={item.id}
+              onClick={() => navigate(item.id)}
+            >
+              <item.icon size={18} />
+              {item.name}
+            </button>
+          ))}
+        </nav>
+        <div className="sidebar-bottom">
+          <div className="private-note">
+            <LockKeyhole size={18} />
+            <strong>Your data stays yours.</strong>
+            <p>
+              Analyzed in your browser.
+              <br />
+              Never uploaded to a server.
+            </p>
+          </div>
+          <div className="author">
+            <span className="author-avatar">JD</span>
+            <div>
+              <strong>JD Regalario</strong>
+              <small>Creator of Orbit</small>
+            </div>
+            <ArrowUpRight size={16} />
+          </div>
+        </div>
+      </aside>
+      <main>
+        <header className="topbar">
+          <span>
+            Workspace <ChevronRight size={13} />{" "}
+            <strong>
+              {page === "overview"
+                ? "Overview"
+                : page === "connections"
+                  ? "Connections"
+                  : page === "compare"
+                    ? "Compare snapshots"
+                    : page === "guide"
+                      ? "Import guide"
+                      : page === "privacy"
+                        ? "Privacy & storage"
+                        : "Platforms"}
+            </strong>
+          </span>
+          <div className="local-badge">
+            <span /> Local processing <ShieldCheck size={14} />
+          </div>
+        </header>
+        <div className="content">
+          <div className="page-heading">
+            <div className="eyebrow">
+              <span className="tiny-dot" /> YOUR CIRCLE, A LITTLE CLEARER
+            </div>
+            <div className="title-row">
+              <div>
+                <h1>
+                  {page === "overview"
+                    ? "A little perspective."
+                    : page === "connections"
+                      ? "Your connections."
+                      : page === "compare"
+                        ? "See what changed."
+                        : page === "guide"
+                          ? "From archive to insight."
+                          : page === "privacy"
+                            ? "Private by design."
+                            : "More of your world."}
+                </h1>
+                <p>
+                  {page === "overview"
+                    ? "Get to know the shape of your social world."
+                    : page === "connections"
+                      ? "Find a connection. Understand where you stand."
+                      : page === "compare"
+                        ? "Compare follower lists from two exports of the same account."
+                        : page === "guide"
+                          ? "A few steps in Instagram. A clearer picture in Orbit."
+                          : page === "privacy"
+                            ? "You choose what to import, save, and remove."
+                            : "Instagram first. A foundation for your other social accounts."}
+                </p>
+              </div>
+              <button className="primary" onClick={openImport}>
+                <Plus size={17} /> Import archive
+              </button>
+            </div>
+          </div>
+          {snapshot &&
+            page !== "guide" &&
+            page !== "privacy" &&
+            page !== "platforms" && (
+              <div className="source-strip">
+                <span className="instagram-icon">
+                  <Instagram size={18} />
+                </span>
+                <strong>Instagram</strong>
+                <span className="source-label">
+                  {snapshot.demo ? "Sample workspace" : snapshot.label}
+                </span>
+                <span className="pill">
+                  {snapshot.demo ? "DEMO DATA" : "LOCAL ARCHIVE"}
+                </span>
+                <button
+                  className="text-button"
+                  onClick={() => {
+                    setSnapshot(null);
+                    setToast(
+                      "Current analysis cleared. Saved snapshots are still on this device.",
+                    );
+                  }}
+                >
+                  <X size={14} /> Clear analysis
+                </button>
+              </div>
+            )}
+          {page === "overview" && (
+            <>
+              {!snapshot ? (
+                <>
+                  <section className="welcome-grid">
+                    <div className="welcome-panel">
+                      <span className="tag">
+                        <Instagram size={14} /> BUILT FOR INSTAGRAM
+                      </span>
+                      <h2>
+                        Your connections.
+                        <br />
+                        <span>The whole picture.</span>
+                      </h2>
+                      <p>
+                        Find who follows you back, explore your circle, and see
+                        what changes over time. All from your Instagram data
+                        export.
+                      </p>
+                      <div className="button-row">
+                        <button className="primary" onClick={openImport}>
+                          <Upload size={17} /> Import your archive
+                        </button>
+                        <button
+                          className="secondary"
+                          onClick={() => {
+                            setSnapshot(demoSnapshot());
+                            setToast("You’re exploring fictional sample data.");
+                          }}
+                        >
+                          Explore a demo <ArrowUpRight size={16} />
+                        </button>
+                      </div>
+                      <small>
+                        <LockKeyhole size={13} /> No password. No account
+                        connection. Just your data.
+                      </small>
+                    </div>
+                    <div className="orbit-art" aria-hidden="true">
+                      <div className="orbit-ring ring-one" />
+                      <div className="orbit-ring ring-two" />
+                      <div className="orbit-ring ring-three" />
+                      <div className="orbit-core">
+                        <OrbitIcon size={48} />
+                      </div>
+                      <span className="planet p1">AR</span>
+                      <span className="planet p2">JL</span>
+                      <span className="planet p3">MK</span>
+                      <span className="planet p4">ST</span>
+                      <span className="art-caption">
+                        <span /> Every connection has a place.
+                      </span>
+                    </div>
+                  </section>
+                  <div className="feature-grid">
+                    {[
+                      {
+                        icon: Users,
+                        title: "See who follows back",
+                        text: "Mutual connections and one-way follows, clearly separated.",
+                      },
+                      {
+                        icon: ArrowLeftRight,
+                        title: "Notice what changes",
+                        text: "Save snapshots on your device and compare follower lists.",
+                      },
+                      {
+                        icon: Fingerprint,
+                        title: "Keep your data close",
+                        text: "Your archive is processed here. No server uploads or tracking.",
+                      },
+                    ].map((f) => (
+                      <section className="panel feature" key={f.title}>
+                        <f.icon size={22} />
+                        <h3>{f.title}</h3>
+                        <p>{f.text}</p>
+                      </section>
+                    ))}
+                  </div>
+                  <section className="guide-callout">
+                    <div>
+                      <BookOpen size={22} />
+                      <div>
+                        <h3>New to Instagram exports?</h3>
+                        <p>
+                          We’ll show you exactly which data and format to
+                          request.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      className="secondary"
+                      onClick={() => navigate("guide")}
+                    >
+                      See the guide <ArrowUpRight size={16} />
+                    </button>
+                  </section>
+                </>
+              ) : (
+                data && (
+                  <>
+                    <div className="stats-grid">
+                      {[
+                        {
+                          label: "Following",
+                          value: snapshot.following.length,
+                          sub: "Accounts in your following list",
+                          group: "following" as Group,
+                        },
+                        {
+                          label: "Followers",
+                          value: snapshot.followers.length,
+                          sub: "Accounts in your follower list",
+                          group: "followers" as Group,
+                        },
+                        {
+                          label: "Mutual connections",
+                          value: data.mutual.length,
+                          sub: `${mutualRate}% of accounts you follow`,
+                          group: "mutual" as Group,
+                        },
+                        {
+                          label: "Not following back",
+                          value: data.notFollowingBack.length,
+                          sub: "You follow them, they don’t follow you",
+                          group: "not-following-back" as Group,
+                        },
+                      ].map((s, i) => (
+                        <button
+                          className={`stat-card stat-${i}`}
+                          key={s.label}
+                          onClick={() => showGroup(s.group)}
+                        >
+                          <span>
+                            {s.label}
+                            <ArrowUpRight size={16} />
+                          </span>
+                          <strong>{number(s.value)}</strong>
+                          <small>{s.sub}</small>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="chart-grid">
+                      <section className="panel circle-panel">
+                        <div className="panel-heading">
+                          <div>
+                            <h3>Your circle, at a glance</h3>
+                            <p>How your connections overlap</p>
+                          </div>
+                          <Users size={18} />
+                        </div>
+                        <div className="circle-chart-row">
+                          <div
+                            className="donut"
+                            role="img"
+                            aria-label={`${data.mutual.length} mutual, ${data.notFollowingBack.length} not following back, ${data.youDontFollow.length} you don't follow`}
+                            style={{
+                              background: data.all.length
+                                ? `conic-gradient(#c3ef7b 0 ${(data.mutual.length / data.all.length) * 100}%, #a69bee ${(data.mutual.length / data.all.length) * 100}% ${((data.mutual.length + data.notFollowingBack.length) / data.all.length) * 100}%, #719aa7 0)`
+                                : "#303830",
+                            }}
+                          >
+                            <div>
+                              <strong>{number(data.all.length)}</strong>
+                              <span>connections</span>
+                            </div>
+                          </div>
+                          <div className="legend">
+                            {[
+                              {
+                                name: "Mutual",
+                                count: data.mutual.length,
+                                color: "#c3ef7b",
+                                group: "mutual" as Group,
+                              },
+                              {
+                                name: "Not following back",
+                                count: data.notFollowingBack.length,
+                                color: "#a69bee",
+                                group: "not-following-back" as Group,
+                              },
+                              {
+                                name: "You don’t follow",
+                                count: data.youDontFollow.length,
+                                color: "#719aa7",
+                                group: "you-dont-follow" as Group,
+                              },
+                            ].map((l) => (
+                              <button
+                                onClick={() => showGroup(l.group)}
+                                key={l.name}
+                              >
+                                <i style={{ background: l.color }} />
+                                <span>{l.name}</span>
+                                <strong>{number(l.count)}</strong>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="panel-foot">
+                          <span className="tiny-dot" /> Each account is counted
+                          once.
+                        </div>
+                      </section>
+                      <section className="panel timeline-panel">
+                        <div className="panel-heading">
+                          <div>
+                            <h3>When you made connections</h3>
+                            <p>Following timestamps in this export · UTC</p>
+                          </div>
+                          <span className="subtle-tag">
+                            {chart.length > 18 ? "LAST 18 MONTHS" : "BY MONTH"}
+                          </span>
+                        </div>
+                        {chartRecent.length ? (
+                          <div className="chart">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <AreaChart
+                                data={chartRecent}
+                                margin={{
+                                  top: 14,
+                                  right: 12,
+                                  left: -25,
+                                  bottom: 0,
+                                }}
+                              >
+                                <defs>
+                                  <linearGradient
+                                    id="areaFill"
+                                    x1="0"
+                                    y1="0"
+                                    x2="0"
+                                    y2="1"
+                                  >
+                                    <stop
+                                      offset="0%"
+                                      stopColor="#c3ef7b"
+                                      stopOpacity={0.25}
+                                    />
+                                    <stop
+                                      offset="100%"
+                                      stopColor="#c3ef7b"
+                                      stopOpacity={0}
+                                    />
+                                  </linearGradient>
+                                </defs>
+                                <CartesianGrid
+                                  stroke="#2a302b"
+                                  vertical={false}
+                                  strokeDasharray="3 5"
+                                />
+                                <XAxis
+                                  dataKey="month"
+                                  tickFormatter={(v) =>
+                                    new Date(
+                                      `${v}-01T00:00:00Z`,
+                                    ).toLocaleDateString("en", {
+                                      month: "short",
+                                      year: "2-digit",
+                                      timeZone: "UTC",
+                                    })
+                                  }
+                                  axisLine={false}
+                                  tickLine={false}
+                                  tick={{ fill: "#929b93", fontSize: 10 }}
+                                  minTickGap={24}
+                                />
+                                <YAxis
+                                  allowDecimals={false}
+                                  axisLine={false}
+                                  tickLine={false}
+                                  tick={{ fill: "#929b93", fontSize: 10 }}
+                                />
+                                <Tooltip
+                                  contentStyle={{
+                                    background: "#202720",
+                                    border: "1px solid #3c473c",
+                                    borderRadius: 10,
+                                    color: "#ecf2e9",
+                                  }}
+                                />
+                                <Area
+                                  type="monotone"
+                                  dataKey="count"
+                                  name="Connections"
+                                  stroke="#c3ef7b"
+                                  strokeWidth={2}
+                                  fill="url(#areaFill)"
+                                  isAnimationActive={false}
+                                />
+                              </AreaChart>
+                            </ResponsiveContainer>
+                          </div>
+                        ) : (
+                          <div className="empty-mini">
+                            No usable following timestamps in this export.
+                          </div>
+                        )}
+                        <div className="panel-foot">
+                          This is a timestamp distribution, not historical
+                          follower growth.
+                        </div>
+                      </section>
+                    </div>
+                    <section className="panel">
+                      <div className="panel-heading">
+                        <div>
+                          <h3>A closer look</h3>
+                          <p>
+                            Accounts you follow that don’t appear in your
+                            follower list
+                          </p>
+                        </div>
+                        <button
+                          className="text-button"
+                          onClick={() => showGroup("not-following-back")}
+                        >
+                          View all {number(data.notFollowingBack.length)}{" "}
+                          <ArrowUpRight size={15} />
+                        </button>
+                      </div>
+                      <div className="preview-accounts">
+                        {data.notFollowingBack.slice(0, 4).map((a, i) => (
+                          <AccountCard
+                            key={a.username}
+                            account={a}
+                            index={i}
+                            demo={snapshot.demo}
+                          />
+                        ))}
+                        {!data.notFollowingBack.length && (
+                          <p className="muted">
+                            Every account you follow appears in your follower
+                            list.
+                          </p>
+                        )}
+                      </div>
+                    </section>
+                    <p className="data-note">
+                      <CircleHelp size={15} />
+                      {snapshot.warnings[0]}
+                    </p>
+                  </>
+                )
+              )}
+            </>
+          )}
+          {page === "connections" && (
+            <>
+              {!snapshot ? (
+                <Empty onImport={openImport} />
+              ) : (
+                <section className="panel connections-panel">
+                  <div
+                    className="filter-tabs"
+                    role="group"
+                    aria-label="Connection category"
+                  >
+                    {(Object.keys(groupNames) as Group[]).map((g) => (
+                      <button
+                        key={g}
+                        className={g === group ? "selected" : ""}
+                        onClick={() => setGroup(g)}
+                      >
+                        {groupNames[g]}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="table-toolbar">
+                    <label className="search-box">
+                      <Search size={17} />
+                      <input
+                        aria-label="Search usernames"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        placeholder="Search a username..."
+                      />
+                    </label>
+                    <select
+                      aria-label="Sort connections"
+                      value={sort}
+                      onChange={(e) => setSort(e.target.value)}
+                    >
+                      <option value="name">Username A to Z</option>
+                      <option value="recent">Latest timestamp</option>
+                    </select>
+                    <button
+                      className="secondary"
+                      disabled={!rows.length}
+                      onClick={() =>
+                        saveBlob(
+                          csv(rows),
+                          `orbit-${group}.csv`,
+                          "text/csv;charset=utf-8",
+                        )
+                      }
+                    >
+                      <ArrowDownToLine size={15} /> Export CSV
+                    </button>
+                  </div>
+                  <div className="table-overflow">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>ACCOUNT</th>
+                          <th>RELATIONSHIP</th>
+                          <th>EXPORT TIMESTAMP</th>
+                          <th>
+                            <span className="sr-only">Profile</span>
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.slice(index * 25, index * 25 + 25).map((a, i) => (
+                          <tr key={a.username}>
+                            <td>
+                              <span className={`avatar color-${i % 4}`}>
+                                {a.username.slice(0, 2).toUpperCase()}
+                              </span>
+                              <strong>@{a.username}</strong>
+                            </td>
+                            <td>
+                              <span className="relationship-tag">
+                                {group === "all"
+                                  ? data?.mutual.some(
+                                      (v) => v.username === a.username,
+                                    )
+                                    ? "Mutual"
+                                    : data?.notFollowingBack.some(
+                                          (v) => v.username === a.username,
+                                        )
+                                      ? "Not following back"
+                                      : "You don’t follow"
+                                  : groupNames[group]}
+                              </span>
+                            </td>
+                            <td className="muted">
+                              {a.timestamp
+                                ? new Date(
+                                    a.timestamp * 1000,
+                                  ).toLocaleDateString()
+                                : "Not available"}
+                            </td>
+                            <td>
+                              {!snapshot.demo && (
+                                <a
+                                  aria-label={`Open ${a.username} on Instagram`}
+                                  href={`https://www.instagram.com/${a.username}/`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  <ArrowUpRight size={16} />
+                                </a>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {!rows.length && (
+                    <div className="empty-mini">
+                      <Search size={24} />
+                      <h3>No matching connections</h3>
+                      <p>Try a different search or category.</p>
+                    </div>
+                  )}
+                  <div className="pagination">
+                    <span>
+                      {rows.length
+                        ? `${index * 25 + 1}–${Math.min(index * 25 + 25, rows.length)} of ${number(rows.length)}`
+                        : "0 results"}
+                    </span>
+                    <div>
+                      <button
+                        aria-label="Previous page"
+                        disabled={index === 0}
+                        onClick={() => setIndex(index - 1)}
+                      >
+                        <ChevronLeft size={17} />
+                      </button>
+                      <span>Page {index + 1}</span>
+                      <button
+                        aria-label="Next page"
+                        disabled={(index + 1) * 25 >= rows.length}
+                        onClick={() => setIndex(index + 1)}
+                      >
+                        <ChevronRight size={17} />
+                      </button>
+                    </div>
+                  </div>
+                </section>
+              )}
+              <p className="data-note">
+                <CircleHelp size={15} /> Names and relationships may have
+                changed since the export. Orbit does not unfollow accounts for
+                you.
+              </p>
+            </>
+          )}
+          {page === "compare" && (
+            <>
+              <section className="panel save-panel">
+                <div>
+                  <h3>Keep a reference point</h3>
+                  <p>
+                    Save your current import in this browser. Use the same
+                    account name in each label.
+                  </p>
+                </div>
+                <div className="button-row">
+                  <input
+                    aria-label="Snapshot label"
+                    placeholder="e.g. myusername · September"
+                    value={savedLabel}
+                    onChange={(e) => setSavedLabel(e.target.value)}
+                    maxLength={80}
+                  />
+                  <button
+                    className="primary"
+                    disabled={!snapshot || snapshot.demo}
+                    onClick={saveSnapshot}
+                  >
+                    <Database size={16} /> Save snapshot
+                  </button>
+                </div>
+                <small>
+                  Up to five snapshots on this device. Saving a sixth replaces
+                  the oldest. Sample data cannot be saved.
+                </small>
+              </section>
+              <section className="panel compare-panel">
+                <div className="panel-heading">
+                  <div>
+                    <h3>Compare two exports</h3>
+                    <p>
+                      Select an earlier and a later export from the same
+                      Instagram account.
+                    </p>
+                  </div>
+                  <ArrowLeftRight size={19} />
+                </div>
+                <div className="comparison-selects">
+                  <label>
+                    Earlier export
+                    <select
+                      aria-label="Earlier export"
+                      value={oldId}
+                      onChange={(e) => setOldId(e.target.value)}
+                    >
+                      <option value="">Choose a snapshot</option>
+                      {saved.map((s) => (
+                        <option key={s.importedAt} value={s.importedAt}>
+                          {s.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <ArrowLeftRight />
+                  <label>
+                    Later export
+                    <select
+                      aria-label="Later export"
+                      value={newId}
+                      onChange={(e) => setNewId(e.target.value)}
+                    >
+                      <option value="">Choose a snapshot</option>
+                      {saved.map((s) => (
+                        <option key={s.importedAt} value={s.importedAt}>
+                          {s.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                {oldId && oldId === newId && (
+                  <p role="alert" className="error">
+                    Choose two different snapshots.
+                  </p>
+                )}
+                {comparison ? (
+                  <div className="comparison-results">
+                    {[
+                      { label: "New in follower list", rows: comparison.added },
+                      {
+                        label: "No longer in follower list",
+                        rows: comparison.removed,
+                      },
+                    ].map((c) => (
+                      <div key={c.label}>
+                        <div className="result-heading">
+                          <h3>
+                            {c.label} <span>{c.rows.length}</span>
+                          </h3>
+                          <button
+                            className="text-button"
+                            disabled={!c.rows.length}
+                            onClick={() =>
+                              saveBlob(
+                                csv(c.rows),
+                                `orbit-${c.label.toLowerCase().replaceAll(" ", "-")}.csv`,
+                                "text/csv",
+                              )
+                            }
+                          >
+                            Export <ArrowDownToLine size={14} />
+                          </button>
+                        </div>
+                        <div className="change-list">
+                          {c.rows.length ? (
+                            c.rows.map((a) => (
+                              <p key={a.username}>@{a.username}</p>
+                            ))
+                          ) : (
+                            <p>No changes in this category.</p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="empty-mini">
+                    <Clock3 size={28} />
+                    <h3>A little time makes a difference.</h3>
+                    <p>Import and save two exports to see changes here.</p>
+                  </div>
+                )}
+                <div className="panel-foot">
+                  A missing username may reflect an unfollow, rename,
+                  deactivation, or incomplete export. Orbit cannot identify the
+                  reason or verify account ownership from these files.
+                </div>
+              </section>
+              <section className="panel">
+                <div className="panel-heading">
+                  <h3>Saved on this device</h3>
+                  <span className="muted">{saved.length} / 5</span>
+                </div>
+                {saved.length ? (
+                  saved.map((s) => (
+                    <div className="saved-row" key={s.importedAt}>
+                      <FileJson size={20} />
+                      <div>
+                        <strong>{s.label}</strong>
+                        <small>
+                          {number(s.followers.length)} followers · Imported{" "}
+                          {new Date(s.importedAt).toLocaleString()}
+                        </small>
+                      </div>
+                      <button
+                        className="secondary"
+                        onClick={() => {
+                          setSnapshot(s);
+                          navigate("overview");
+                        }}
+                      >
+                        Open
+                      </button>
+                      <button
+                        className="icon-button"
+                        aria-label={`Delete ${s.label}`}
+                        onClick={() => removeSaved(s.importedAt)}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))
+                ) : (
+                  <p className="empty-text">No snapshots saved yet.</p>
+                )}
+              </section>
+            </>
+          )}
+          {page === "guide" && <Guide onImport={openImport} />}
+          {page === "privacy" && (
+            <>
+              <div className="feature-grid">
+                {[
+                  {
+                    icon: LockKeyhole,
+                    title: "Processed on your device",
+                    text: "Your ZIP and JSON files are read inside a browser worker. Orbit sends no archive contents to a server.",
+                  },
+                  {
+                    icon: Database,
+                    title: "Saved only when you choose",
+                    text: "Imports stay in memory until the page closes. Saved snapshots use local browser storage and can be removed anytime.",
+                  },
+                  {
+                    icon: ShieldCheck,
+                    title: "No Instagram credentials",
+                    text: "Orbit never needs your password, cookies, or an access token. Profile links open Instagram in a separate tab.",
+                  },
+                ].map((f) => (
+                  <section className="panel feature" key={f.title}>
+                    <f.icon size={24} />
+                    <h3>{f.title}</h3>
+                    <p>{f.text}</p>
+                  </section>
+                ))}
+              </div>
+              <section className="panel prose">
+                <h3>What Orbit can tell you</h3>
+                <p>
+                  Connections are calculated by comparing usernames in your
+                  follower and following files. Dates come from the export. They
+                  are not evidence of how often someone interacts with you.
+                </p>
+                <h3>What the files cannot tell you</h3>
+                <p>
+                  Profile visitors, who muted you, why a relationship changed,
+                  and a person’s interest in you are not available. A single
+                  export cannot identify who unfollowed you.
+                </p>
+                <h3>Your device, your choice</h3>
+                <p>
+                  Anyone with access to this browser profile may be able to read
+                  saved snapshots. Local storage is not encrypted by Orbit.
+                  Clearing site data or using private browsing may remove them.
+                  Your hosting provider still receives normal page requests,
+                  such as your IP address, but no imported archive data.
+                </p>
+                <button className="danger-button" onClick={clearAll}>
+                  <Trash2 size={16} /> Clear all Orbit data on this device
+                </button>
+              </section>
+            </>
+          )}
+          {page === "platforms" && (
+            <>
+              <section className="panel platform-card">
+                <span className="platform-logo">
+                  <Instagram size={32} />
+                </span>
+                <div>
+                  <span className="pill">AVAILABLE</span>
+                  <h2>Instagram</h2>
+                  <p>
+                    Follower comparisons, mutual connections, timestamp charts,
+                    pending requests, and local snapshots.
+                  </p>
+                </div>
+                <button className="primary" onClick={openImport}>
+                  Import archive <Upload size={16} />
+                </button>
+              </section>
+              <div className="feature-grid">
+                {[
+                  {
+                    name: "X / Twitter",
+                    text: "Planned: follower and following comparisons using account IDs. Archive scripts must be parsed as data, never executed.",
+                  },
+                  {
+                    name: "TikTok",
+                    text: "Planned: a dedicated JSON adapter for supported follow lists and activity records. Availability varies by export.",
+                  },
+                  {
+                    name: "Snapchat",
+                    text: "Planned: friendship and account-history views. Its data does not map directly to Instagram follow relationships.",
+                  },
+                ].map((p) => (
+                  <section className="panel feature" key={p.name}>
+                    <span className="subtle-tag">PLANNED</span>
+                    <h3>{p.name}</h3>
+                    <p>{p.text}</p>
+                  </section>
+                ))}
+              </div>
+              <p className="data-note">
+                <CircleHelp size={15} /> Only Instagram archives are supported
+                in this release. Each new platform needs its own validated
+                parser and clear data limitations.
+              </p>
+            </>
+          )}
+          <footer>
+            <span>
+              <OrbitIcon size={15} /> Orbit{" "}
+              <span className="footer-dot">·</span> Made by JD Regalario
+            </span>
+            <button onClick={() => navigate("privacy")}>
+              Built to keep your data yours <ArrowUpRight size={13} />
+            </button>
+          </footer>
+        </div>
+      </main>
+      <dialog
+        ref={dialog}
+        onCancel={(e) => {
+          e.preventDefault();
+          cancelImport();
+        }}
+        onPointerDown={(e) => {
+          if (e.target === e.currentTarget) cancelImport();
+        }}
+      >
+        <div className="modal">
+          <button
+            className="close-modal icon-button"
+            aria-label="Close import"
+            onClick={cancelImport}
+          >
+            <X size={20} />
+          </button>
+          <span className="modal-icon">
+            <Upload size={25} />
+          </span>
+          <h2>Bring your circle into focus.</h2>
+          <p>
+            Choose your Instagram ZIP, or select following.json and every
+            followers_*.json file together.
+          </p>
+          <input
+            ref={fileInput}
+            className="sr-only"
+            tabIndex={-1}
+            type="file"
+            multiple
+            accept=".zip,.json"
+            onChange={(e) => {
+              importFiles(Array.from(e.target.files || []));
+              e.target.value = "";
+            }}
+          />
+          <button
+            className={`dropzone ${drag ? "dragging" : ""}`}
+            disabled={busy}
+            onClick={() => fileInput.current?.click()}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDrag(true);
+            }}
+            onDragLeave={() => setDrag(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDrag(false);
+              if (!busy) importFiles(Array.from(e.dataTransfer.files));
+            }}
+          >
+            <Upload size={28} />
+            <strong>
+              {busy ? "Reading your archive…" : "Drop your archive here"}
+            </strong>
+            <span>
+              {busy
+                ? "Processing locally. You can cancel at any time."
+                : "or click to choose files"}
+            </span>
+            <small>ZIP or JSON · up to 250 MB total</small>
+          </button>
+          {busy && <div className="loading-line" />}
+          {error && (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          )}
+          <div className="import-tip">
+            <Check size={17} />
+            <span>
+              Choose <strong>JSON</strong> and <strong>All time</strong> when
+              requesting your export. Import one account at a time.
+            </span>
+          </div>
+          <div className="modal-bottom">
+            <span>
+              <LockKeyhole size={13} /> Files never leave this device
+            </span>
+            <button
+              className="text-button"
+              onClick={() => {
+                cancelImport();
+                navigate("guide");
+              }}
+            >
+              Need a hand? <ArrowUpRight size={14} />
+            </button>
+          </div>
+        </div>
+      </dialog>
+      {toast && (
+        <div className="toast" role="status">
+          <Check size={17} />
+          {toast}
+          <button
+            aria-label="Dismiss notification"
+            onClick={() => setToast("")}
+          >
+            <X size={15} />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+function AccountCard({
+  account,
+  index,
+  demo,
+}: {
+  account: Account;
+  index: number;
+  demo?: boolean;
+}) {
+  return (
+    <div className="account-card">
+      <span className={`avatar color-${index % 4}`}>
+        {account.username.slice(0, 2).toUpperCase()}
+      </span>
+      <div>
+        <strong>@{account.username}</strong>
+        <small>Not following back</small>
+      </div>
+      {!demo && (
+        <a
+          href={`https://www.instagram.com/${account.username}/`}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={`Open ${account.username} on Instagram`}
+        >
+          <ArrowUpRight size={16} />
+        </a>
+      )}
+    </div>
+  );
+}
+function Empty({ onImport }: { onImport: () => void }) {
+  return (
+    <section className="panel empty-state">
+      <Users size={35} />
+      <h2>Your connections will appear here.</h2>
+      <p>Import an Instagram archive to get started.</p>
+      <button className="primary" onClick={onImport}>
+        <Upload size={17} /> Import archive
+      </button>
+    </section>
+  );
+}
+function Guide({ onImport }: { onImport: () => void }) {
+  return (
+    <div className="guide-layout">
+      <section className="panel steps">
+        {[
+          {
+            title: "Open your information settings",
+            text: "In Instagram, open your profile menu and go to Accounts Center (or Meta Account). Look for Your information and permissions, then Export your information or Download your information. Labels may vary.",
+          },
+          {
+            title: "Choose your Instagram profile",
+            text: "Create an export for one Instagram account and choose Export to device. Customize the information to include Followers and following. There is no need to include messages, photos, or videos.",
+          },
+          {
+            title: "Set the format and date range",
+            text: "Select JSON, then set the date range to All time. A shorter range may leave out connections and make the comparison incomplete.",
+          },
+          {
+            title: "Download your export from Meta",
+            text: "Submit the request and wait for Instagram to tell you it is ready. Return to the export page and download the ZIP to your device. Preparation time varies.",
+          },
+          {
+            title: "Open it here in Orbit",
+            text: "Import the ZIP, or extract it and select following.json and all followers_1.json, followers_2.json, and other follower parts together. Keep files from different accounts and export dates separate.",
+          },
+        ].map((step, i) => (
+          <div className="step" key={step.title}>
+            <span>{String(i + 1).padStart(2, "0")}</span>
+            <div>
+              <h3>{step.title}</h3>
+              <p>{step.text}</p>
+              {i === 2 && (
+                <div className="button-row">
+                  <span className="setting-chip">
+                    <Check size={13} /> JSON format
+                  </span>
+                  <span className="setting-chip">
+                    <Check size={13} /> All time
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+        <button className="primary" onClick={onImport}>
+          I have my archive <Upload size={16} />
+        </button>
+      </section>
+      <aside className="guide-aside">
+        <section className="panel prose">
+          <FileJson size={26} />
+          <h3>The files that matter</h3>
+          <code>
+            followers_1.json
+            <br />
+            followers_2.json
+            <br />
+            following.json
+          </code>
+          <p>
+            Often inside connections/followers_and_following/. Extra follower
+            parts depend on your account size.
+          </p>
+          <p>
+            Optional: pending_follow_requests.json adds your pending requests.
+          </p>
+        </section>
+        <section className="panel prose">
+          <CircleHelp size={23} />
+          <h3>Something missing?</h3>
+          <p>
+            HTML exports are not supported. Request JSON instead. If a large ZIP
+            will not import, extract it and select only the connection files.
+          </p>
+          <a
+            href="https://help.instagram.com/181231772500920"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Instagram’s official export help <ArrowUpRight size={14} />
+          </a>
+        </section>
+      </aside>
+    </div>
+  );
+}
